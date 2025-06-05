@@ -9,7 +9,7 @@ void task_1()
         // wait
         for (volatile int i = 0; i < 1000; i++);
         // return control back to schedular
-        yield();
+        preempt();
     }
 }
 
@@ -21,7 +21,7 @@ void task_2()
         // wait
         for (volatile int i = 0; i < 1000; i++);
         // return control back to schedular
-        yield();
+        preempt();
     }
 }
 

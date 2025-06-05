@@ -4,6 +4,6 @@
 void scheduler_init();
 void scheduler_add_task(void (*task)());
 void scheduler_run();
-void yield();
+void preempt();
 
 #endif
