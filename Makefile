@@ -11,11 +11,14 @@ CFLAGS = -Wall -O0 -nostdlib -nostartfiles -ffreestanding
 
 all: kernel8.img
 
-kernel8.img: start.o main.o scheduler.o
+kernel8.img: start.o main.o scheduler.o task.o context.o
 	$(LD) -T linker.ld -o kernel.elf $^
 	$(OBJCOPY) kernel.elf -O binary $@
 
 %.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+context.o: context.S
 	$(CC) $(CFLAGS) -c $< -o $@
 
 start.o: start.S

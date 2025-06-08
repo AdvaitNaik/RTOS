@@ -8,5 +8,5 @@ SECTIONS {
   .bss : { *(.bss*) *(COMMON) }
 
   . = ALIGN(16);
-  _stack_top = . + 0x4000;
+  _stack_top = . + 0x4000; /* 16 KB stack */
 }
