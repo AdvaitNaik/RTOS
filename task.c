@@ -22,7 +22,9 @@ void
 task_create(void (*entry)(void))
 {
     Task *tsk = &tasks[task_count];
-    tsk->stack_base = (uint64_t*) (0x80000 + 0x10000 * (task_count + 1));
+    tsk->stack_base = (uint64_t*)(uintptr_t)(0x80000UL + 0x10000UL * (task_count + 1));
+    // Calculate the top of the stack
+    // Dividing STACK_SIZE by size of each element (uint64_t), subtracting 1 to point to the last element
     tsk->stack_pc = tsk->stack_base + TASK_STACK_SIZE / sizeof(uint64_t) - 1;
 
     // simulate the expected state of the stack so the task can “resume” and start executing entry.
@@ -47,7 +49,7 @@ task_get_count(void)
 void
 task_yield(void)
 {
-    asm volatile ("ret");
+    __asm__ volatile ("ret");
 }
 
 void
@@ -60,7 +62,7 @@ task_switch_to(int id)
     {
         current = id;
         uint64_t* initial_pc = tasks[id].stack_pc;
-        asm volatile ("mov sp, %0" :: "r"(initial_pc));
+        __asm__ volatile ("mov sp, %0" :: "r"(initial_pc));
         tasks[id].entry();
     } 
     else
