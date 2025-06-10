@@ -1,4 +1,5 @@
 #include "task.h"
+#include "mm.h"
 #include <stdint.h>
 
 // Each task has 4kB private stack
@@ -22,7 +23,8 @@ void
 task_create(void (*entry)(void))
 {
     Task *tsk = &tasks[task_count];
-    tsk->stack_base = (uint64_t*)(uintptr_t)(0x80000UL + 0x10000UL * (task_count + 1));
+    // tsk->stack_base = (uint64_t*)(uintptr_t)(0x80000UL + 0x10000UL * (task_count + 1));
+    tsk->stack_base = (uint64_t*)mm_alloc_page();
     // Calculate the top of the stack
     // Dividing STACK_SIZE by size of each element (uint64_t), subtracting 1 to point to the last element
     tsk->stack_pc = tsk->stack_base + TASK_STACK_SIZE / sizeof(uint64_t) - 1;

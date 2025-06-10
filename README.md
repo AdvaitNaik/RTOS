@@ -11,6 +11,7 @@
 - `task.c` - Task management
 - `timer.c` - ARM Generic Timer
 - `irq.c` - Handle Timer Interrupts
+- `mm.c` - Memory Manager
 
 ```
 -> kernel_main() 
