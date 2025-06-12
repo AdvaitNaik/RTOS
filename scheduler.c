@@ -6,6 +6,12 @@
 static int current_task = -1;
 static int task_count = 0;
 
+int
+scheduler_get_current_task(void)
+{
+    return current_task;
+}
+
 void 
 scheduler_init(void) 
 {
@@ -17,12 +23,19 @@ scheduler_init(void)
 void 
 scheduler_run(void)
 {
-    while(1) 
+    // [VERSION 1]
+    // while(1) 
+    // {
+    //     current_task = (current_task + 1) % task_count;
+    //     // tasks[current_task]();
+    //     task_switch_to(current_task);
+    // }
+    
+    int start = current_task;
+    do
     {
         current_task = (current_task + 1) % task_count;
-        // tasks[current_task]();
-        task_switch_to(current_task);
-    }
+    } while (task_states[current_task] != TASK_READY && current_task != start);
 }
 
 // [VERSION 1]

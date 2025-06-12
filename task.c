@@ -2,10 +2,6 @@
 #include "mm.h"
 #include <stdint.h>
 
-// Each task has 4kB private stack
-#define TASK_STACK_SIZE (4 * 1024)
-#define MAX_TASKS 4
-
 typedef struct {
     uint64_t *stack_base;
     uint64_t *stack_pc;
@@ -73,5 +69,22 @@ task_switch_to(int id)
         current = id;
         context_switch(&tasks[prev].stack_pc, tasks[id].stack_pc);
     } 
+}
 
+void
+task_block(int id)
+{
+    task_states[id] = TASK_BLOCKED;
+}
+
+void
+task_unblock_all(void)
+{
+    for (int i = 0; i < MAX_TASKS; i++)
+    {
+        if (task_states[i] == TASK_BLOCKED)
+        {
+            task_states[i] = TASK_READY;
+        }
+    }
 }

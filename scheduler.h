@@ -6,5 +6,6 @@ void scheduler_run(void);
 // void scheduler_run();
 // void scheduler_add_task(void (*task)());
 // void preempt();
+int scheduler_get_current_task(void);
 
 #endif
