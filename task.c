@@ -2,12 +2,17 @@
 #include "mm.h"
 #include <stdint.h>
 
+// Each task has 4kB private stack
+#define TASK_STACK_SIZE (4 * 1024)
+#define MAX_TASKS 4
+
 typedef struct {
     uint64_t *stack_base;
     uint64_t *stack_pc;
     void (*entry)(void);
 } Task;
 
+task_state_t task_states[MAX_TASKS];
 static Task tasks[MAX_TASKS];
 static int task_count = 0;
 

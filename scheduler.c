@@ -6,6 +6,8 @@
 static int current_task = -1;
 static int task_count = 0;
 
+extern task_state_t task_states[MAX_TASKS];
+
 int
 scheduler_get_current_task(void)
 {
