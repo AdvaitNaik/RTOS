@@ -12,5 +12,6 @@ void task_switch_to(int id);
 void task_yield(void);
 void task_block(int id);
 void task_unblock_all(void);
+void task_unblock(int id);
 
 #endif

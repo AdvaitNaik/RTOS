@@ -22,8 +22,8 @@ mutex_lock(mutex_t *m)
             return;
         } else {
             // If already locked → block the current task and switch to next
-            task_block(schedular_get_current_task());
-            schedular_run();
+            task_block(scheduler_get_current_task());
+            scheduler_run();
         }
     }
 }

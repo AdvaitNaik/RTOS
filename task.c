@@ -93,3 +93,9 @@ task_unblock_all(void)
         }
     }
 }
+
+void
+task_unblock(int id)
+{
+    task_states[id] = TASK_READY;
+}

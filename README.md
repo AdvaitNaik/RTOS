@@ -13,6 +13,7 @@
 - `irq.c` - Handle Timer Interrupts
 - `mm.c` - Memory Manager
 - `mutex.c` - Software lock that ensures only one task accesses a shared resource at a time
+- `semaphore.c`- Counter used to control access to shared resources by multiple tasks
 
 ```
 -> kernel_main() 
