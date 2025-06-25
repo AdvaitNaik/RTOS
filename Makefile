@@ -11,7 +11,7 @@ CFLAGS = -Wall -O0 -nostdlib -nostartfiles -ffreestanding
 
 all: kernel8.img
 
-kernel8.img: start.o main.o scheduler.o task.o context.o timer.o irq.o vectors.o mm.o mutex.o semaphore.o
+kernel8.img: start.o main.o scheduler.o task.o context.o timer.o irq.o vectors.o mm.o mutex.o semaphore.o syscall.o syscall_dispatch.o
 	$(LD) -T linker.ld -o kernel.elf $^
 	$(OBJCOPY) kernel.elf -O binary $@
 
