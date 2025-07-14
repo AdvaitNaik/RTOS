@@ -3,6 +3,7 @@
 #include "task.h"
 #include "timer.h"
 #include "irq.h"
+#include "syscall.h"
 
 void 
 task_1(void)
@@ -11,6 +12,7 @@ task_1(void)
     {
         // adv_printf("Task 1 running\n");
         // wait
+        syscall(SYSCALL_YIELD);
         for (volatile int i = 0; i < 1000; i++);
         // return control back to schedular
         // preempt();

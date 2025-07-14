@@ -14,6 +14,7 @@
 - `mm.c` - Memory Manager
 - `mutex.c` - Software lock that ensures only one task accesses a shared resource at a time
 - `semaphore.c`- Counter used to control access to shared resources by multiple tasks
+- `syscalls.c` - Controlled, software-triggered exceptions used by tasks to request OS service
 
 ```
 -> kernel_main() 
@@ -52,4 +53,16 @@ HIGH ADDR
 | saved x19-x30     |
 +-------------------+
 LOW ADDR
+```
+
+```
+task1.c    → syscall(SYSCALL_YIELD)
+           → mov x8, #0
+           → svc #0
+ ↓
+vectors.S  → el1_sync
+           → syscall_dispatch(x2)
+ ↓
+dispatcher → calls scheduler_run()
+           → context_switch to next task
 ```
