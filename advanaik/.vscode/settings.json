@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "task.h": "c",
+        "stdint.h": "c",
+        "stddef.h": "c"
+    }
+}

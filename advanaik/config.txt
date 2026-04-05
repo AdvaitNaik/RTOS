@@ -1,0 +1,9 @@
+kernel=kernel8.img
+arm_64bit=1
+os_check=0
+hdmi_force_hotplug=1
+hdmi_group=2
+# fallback: 640x480 (debug)
+hdmi_mode=87
+hdmi_cvt=640 480 60 1 0 0 0
+disable_overscan=1
