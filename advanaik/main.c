@@ -1,6 +1,7 @@
-// main.c -- parse DTB (FDT), find simple-framebuffer under /chosen, draw HELLO RPI5
+// main.c -- FDT simple-framebuffer (if present) or Pi 5 mailbox framebuffer
 #include <stdint.h>
 #include <stddef.h>
+#include "pi5_hw.h"
 
 /* mini string functions for bare-metal */
 static size_t strlen(const char *s) {
@@ -202,7 +203,7 @@ int fdt_find_framebuffer(void *dtb)
                                 format_buf[copylen] = 0;
                             }
                             /* advance to next prop */
-                            const uint8_t *next = pv + prop_len;
+                            const uint8_t *next = pv + pl;
                             scan = (const uint8_t *)align4(next, structp);
                             continue;
                         } else if (tk == FDT_END_NODE) {
@@ -219,7 +220,7 @@ int fdt_find_framebuffer(void *dtb)
                     /* accept node only if we have reg and width/height or stride */
                     if (fb_reg_addr != 0 && ( (width && height) || stride )) {
                         /* got framebuffer info */
-                        fb = (volatile uint8_t *) (uintptr_t)(fb_reg_addr & 0x3FFFFFFFUL);
+                        fb = (volatile uint8_t *)(uintptr_t)fb_reg_addr;
                         fb_width = width ? width : (uint32_t)(fb_reg_size ? (fb_reg_size / 4) : 0);
                         fb_height = height ? height : 0;
                         fb_stride = stride ? stride : (fb_width * 4);
@@ -241,20 +242,66 @@ int fdt_find_framebuffer(void *dtb)
     return -3; /* not found */
 }
 
-/* kernel_main: dtb_ptr in x0 */
-void kernel_main(uint64_t dtb_ptr)
+static int dtb_is_valid(void *dtb)
 {
-    void *dtb = (void *)(uintptr_t)dtb_ptr;
+    if (!dtb)
+        return 0;
+    const uint8_t *b = (const uint8_t *)dtb;
+    return be32(b + 0) == FDT_MAGIC;
+}
 
-    int r = fdt_find_framebuffer(dtb);
-    if (r != 0) {
-        /* failure: hang but show LED pattern by spinning */
-        while (1) { asm volatile("wfe"); }
+/* reg0/reg1: values from firmware (typically DTB in x0, zero in x1) */
+void kernel_main(uint64_t reg0, uint64_t reg1)
+{
+    uart10_init();
+    uart10_puts("\n\nadvanaik Pi5 bringup\n");
+
+    void *dtb = NULL;
+    if (dtb_is_valid((void *)(uintptr_t)reg0))
+        dtb = (void *)(uintptr_t)reg0;
+    else if (dtb_is_valid((void *)(uintptr_t)reg1))
+        dtb = (void *)(uintptr_t)reg1;
+    else {
+        uart10_puts("DTB magic fail x0=");
+        uart10_hex64(reg0);
+        uart10_puts(" x1=");
+        uart10_hex64(reg1);
+        uart10_puts("\n");
     }
 
-    /* success: draw */
-    fill_screen(0xFF0000FF); /* magenta-ish (ARGB) */
-    draw_string(40, 40, "HELLO RPI5", 0xFFFFFFFF, 0xFF000000);
+    int have_fb = 0;
+    if (dtb && fdt_find_framebuffer(dtb) == 0) {
+        have_fb = 1;
+        uart10_puts("FDT simple-framebuffer OK\n");
+    } else if (dtb)
+        uart10_puts("FDT: no simple-framebuffer (using mailbox)\n");
 
-    while (1) { asm volatile("wfe"); }
+    if (!have_fb) {
+        uintptr_t pa;
+        uint32_t pitch;
+        int err = pi5_mailbox_framebuffer(640, 480, &pa, &pitch);
+        if (err != 0) {
+            uart10_puts("mailbox fb err=");
+            uart10_hex32((uint32_t)err);
+            uart10_puts("\n");
+            while (1)
+                asm volatile("wfe");
+        }
+        fb = (volatile uint8_t *)pa;
+        fb_width = 640;
+        fb_height = 480;
+        fb_stride = pitch;
+        uart10_puts("mailbox fb pa=");
+        uart10_hex64(pa);
+        uart10_puts(" pitch=");
+        uart10_hex32(pitch);
+        uart10_puts("\n");
+    }
+
+    fill_screen(0xFF0000FF);
+    draw_string(40, 40, "HELLO RPI5", 0xFFFFFFFF, 0xFF000000);
+    uart10_puts("draw done\n");
+
+    while (1)
+        asm volatile("wfe");
 }
