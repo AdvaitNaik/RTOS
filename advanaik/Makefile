@@ -3,9 +3,9 @@ CC = $(CROSS)gcc
 LD = $(CROSS)ld
 OBJCOPY = $(CROSS)objcopy
 
-CFLAGS = -Wall -O2 -ffreestanding -nostdlib -mcpu=cortex-a76 -I.
+CFLAGS = -Wall -O2 -ffreestanding -nostdlib -nostartfiles -mcpu=cortex-a76 -I.
 
-OBJS = start.o main.o pi5_hw.o
+OBJS = start.o main.o
 
 all: kernel8.img
 
