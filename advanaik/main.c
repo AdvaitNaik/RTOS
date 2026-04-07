@@ -35,6 +35,17 @@
 
 void *g_firmware_dtb;
 
+/*
+ * Diagnostics (inspect in a debugger, or read the LED):
+ *   g_gio_mmio_from_fdt == 1  → fdt_find_soc_mmio_32() matched reg <0x7d517c00 0x40> → LED blinks.
+ *   g_gio_mmio_from_fdt == 0  → MMIO fallback → LED stays solid ON (still have DTB; scan missed reg).
+ *   No DTB (panic) → LED solid OFF, then sleep forever.
+ *   g_fdt_find_gio_rc       → 0 on success; else error code from fdt_find_soc_mmio_32(), or -1 if no DTB.
+ */
+volatile int g_gio_mmio_from_fdt;
+volatile int g_fdt_find_gio_rc;
+volatile uint64_t g_gio_mmio_phys;
+
 /* MMIO base for gio_aon; set from DTB or left at fallback. */
 static uint64_t g_gpio_mmio = MMIO_SOC_FALLBACK;
 
@@ -101,22 +112,35 @@ static void led_toggle(void)
     reg_w(g_gpio_mmio + GIO_DATA(ACT_BANK), d);
 }
 
-static void panic_blink_loop(void)
+/* Active-low LED: on != 0 → LED lit (GPIO driven low). */
+static void led_set(int on)
 {
-    for (;;) {
-        led_toggle();
-        for (volatile uint64_t i = 0; i < 8000000ULL; i++)
-            asm volatile("" ::: "memory");
-    }
+    uint32_t d = reg_r(g_gpio_mmio + GIO_DATA(ACT_BANK));
+    if (on)
+        d &= ~(1u << ACT_GPIO);
+    else
+        d |= (1u << ACT_GPIO);
+    reg_w(g_gpio_mmio + GIO_DATA(ACT_BANK), d);
+}
+
+static void panic_no_dtb(void)
+{
+    led_set(0);
+    for (;;)
+        asm volatile("wfe");
 }
 
 void kernel_main(uint64_t reg0, uint64_t reg1)
 {
+    g_gio_mmio_from_fdt = 0;
+    g_fdt_find_gio_rc = -1;
+
     void *dtb = pick_dtb(reg0, reg1);
     if (!dtb) {
         g_gpio_mmio = MMIO_SOC_FALLBACK;
+        g_gio_mmio_phys = g_gpio_mmio;
         led_init();
-        panic_blink_loop();
+        panic_no_dtb();
     }
 
     g_firmware_dtb = dtb;
@@ -126,14 +150,30 @@ void kernel_main(uint64_t reg0, uint64_t reg1)
      * If this fails (unexpected DTB), keep MMIO_SOC_FALLBACK from static init.
      */
     uint64_t mmio = g_gpio_mmio;
-    if (fdt_find_soc_mmio_32(dtb, GIO_AON_REG_ADDR, GIO_AON_REG_SIZE, &mmio) == 0)
+    int rc = fdt_find_soc_mmio_32(dtb, GIO_AON_REG_ADDR, GIO_AON_REG_SIZE, &mmio);
+    g_fdt_find_gio_rc = rc;
+    if (rc == 0) {
         g_gpio_mmio = mmio;
+        g_gio_mmio_from_fdt = 1;
+    }
+    g_gio_mmio_phys = g_gpio_mmio;
 
     led_init();
 
-    /* Half-period in ms (try 50 for a fast blink). */
-    for (;;) {
-        led_toggle();
-        delay_ms(250);
+    /*
+     * LED pattern:
+     *   No valid DTB → solid OFF (panic_no_dtb).
+     *   Valid DTB + FDT reg match → blinking (g_gio_mmio_from_fdt == 1).
+     *   Valid DTB + fallback MMIO → solid ON (g_gio_mmio_from_fdt == 0).
+     */
+    if (g_gio_mmio_from_fdt) {
+        for (;;) {
+            led_toggle();
+            delay_ms(250);
+        }
     }
+
+    led_set(1);
+    for (;;)
+        asm volatile("wfe");
 }
