@@ -1,18 +1,29 @@
 /*
- * Phase 2 — Pi 5 (BCM2712) bring-up
+ * Phase 3 — Pi 5 (BCM2712) bring-up
  *
- * 1) Device tree (DTB): firmware usually passes its physical address in x0 (and sometimes x1).
- *    We only check the FDT magic (0xd00dfeed, big-endian in the blob). Full parsing comes later.
+ * Phase 1: LED blink (hard-coded gio_aon MMIO).
+ * Phase 2: validate DTB pointer + magic; delays via BCM system timer (1 MHz CLO).
+ * Phase 3: walk the Flattened Device Tree (FDT) to find gio_aon "reg" and compute CPU
+ *          physical base (0x1_0000_0000 + offset per soc ranges). Fallback if not found.
  *
- * 2) Time: ARM generic physical counter (CNTPCT_EL0) + frequency (CNTFRQ_EL0) for millisecond delays
- *    instead of a blind spin loop.
- *
- * LED: gio_aon GPIO 9, active-low (same as phase 1).
+ * LED: ACT on gio_aon GPIO 9, active-low.
  */
 #include <stdint.h>
+#include "fdt.h"
 
-#define MMIO_SOC UINT64_C(0x0000001000000000)
-#define GIO_AON  (MMIO_SOC + UINT64_C(0x07d517c00))
+#define GIO_AON_REG_ADDR 0x7d517c00u
+#define GIO_AON_REG_SIZE 0x40u
+
+#define MMIO_SOC_FALLBACK (UINT64_C(0x0000001000000000) + UINT64_C(0x07d517c00))
+
+/*
+ * BCM2835-style system timer (bcm2712.dtsi: timer@7c003000, clock-frequency = 1 MHz).
+ * CLO = free-running microsecond counter — reliable on Pi bare metal.
+ * (ARM CNTPCT_EL0 + CNTFRQ_EL0 can disagree with real tick rate in some EL1/firmware setups,
+ *  which makes delay_ms() feel "stuck slow" no matter how small you set ms.)
+ */
+#define SYSTIMER_BASE (UINT64_C(0x0000001000000000) + UINT64_C(0x07c003000))
+#define SYSTIMER_CLO  (SYSTIMER_BASE + 0x04u)
 
 #define GIO_BANK_STRIDE 32u
 #define GIO_ODEN(b)   ((uint64_t)(b)*GIO_BANK_STRIDE + 0)
@@ -22,13 +33,10 @@
 #define ACT_GPIO 9u
 #define ACT_BANK 0u
 
-/* First 4 bytes of a valid flattened device tree blob (big-endian in the file) */
-#define FDT_MAGIC 0xd00dfeedu
-
-/* Phase 3+ will parse this blob instead of hard-coding MMIO bases. */
 void *g_firmware_dtb;
 
-static const uint64_t g_gio = GIO_AON;
+/* MMIO base for gio_aon; set from DTB or left at fallback. */
+static uint64_t g_gpio_mmio = MMIO_SOC_FALLBACK;
 
 static inline void reg_w(uint64_t addr, uint32_t v)
 {
@@ -40,22 +48,13 @@ static inline uint32_t reg_r(uint64_t addr)
     return *(volatile uint32_t *)addr;
 }
 
-/* Read big-endian 32-bit value using byte loads (safe alignment). */
-static uint32_t be32_at(const void *p)
-{
-    const uint8_t *b = (const uint8_t *)p;
-    return ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) |
-           (uint32_t)b[3];
-}
-
 static int dtb_pointer_ok(uint64_t p)
 {
     if (p == 0)
         return 0;
-    /* Linux boot requirements: DTB on 8-byte boundary */
     if (p & 7ULL)
         return 0;
-    return be32_at((const void *)(uintptr_t)p) == FDT_MAGIC;
+    return fdt_blob_magic_ok((const void *)(uintptr_t)p);
 }
 
 static void *pick_dtb(uint64_t reg0, uint64_t reg1)
@@ -67,86 +66,41 @@ static void *pick_dtb(uint64_t reg0, uint64_t reg1)
     return 0;
 }
 
-/* --- ARM generic timer (EL1 physical counter) --- */
+/* --- Delays: BCM system timer CLO (1 tick = 1 microsecond) --- */
 
-static inline uint64_t cntpct_el0_read(void)
+static inline uint32_t systimer_clo_read(void)
 {
-    uint64_t v;
-    asm volatile("mrs %0, cntpct_el0" : "=r"(v));
-    return v;
+    return *(volatile uint32_t *)SYSTIMER_CLO;
 }
 
-static inline uint32_t cntfrq_el0_read(void)
-{
-    uint32_t v;
-    asm volatile("mrs %0, cntfrq_el0" : "=r"(v));
-    return v;
-}
-
-/* Enable the EL1 physical timer counter (many firmwares already do this). */
-static void arm_timer_enable(void)
-{
-    uint64_t ctl;
-    asm volatile("mrs %0, cntp_ctl_el0" : "=r"(ctl));
-    ctl |= 1ULL; /* EN */
-    asm volatile("msr cntp_ctl_el0, %0" :: "r"(ctl));
-    asm volatile("isb" ::: "memory");
-}
-
-/*
- * Busy-wait for ms milliseconds using the system counter.
- * Falls back to a coarse spin if CNTFRQ is zero (should not happen on Pi 5).
- */
 static void delay_ms(uint32_t ms)
 {
-    uint32_t frq = cntfrq_el0_read();
-    if (frq == 0) {
-        for (volatile uint64_t i = 0; i < (uint64_t)ms * 200000ULL; i++)
-            asm volatile("" ::: "memory");
-        return;
-    }
-
-    uint64_t ticks = ((uint64_t)frq * (uint64_t)ms) / 1000ULL;
-    if (ticks == 0)
-        ticks = 1;
-
-    uint64_t start = cntpct_el0_read();
-    while (cntpct_el0_read() - start < ticks)
+    uint32_t us = ms * 1000u;
+    uint32_t start = systimer_clo_read();
+    while ((uint32_t)(systimer_clo_read() - start) < us)
         ;
 }
 
-/* --- ACT LED (active low: clear bit = LED on, set bit = LED off) --- */
+/* --- LED --- */
 
 static void led_init(void)
 {
-    uint32_t iodir = reg_r(g_gio + GIO_IODIR(ACT_BANK));
+    uint32_t iodir = reg_r(g_gpio_mmio + GIO_IODIR(ACT_BANK));
     iodir &= ~(1u << ACT_GPIO);
-    reg_w(g_gio + GIO_IODIR(ACT_BANK), iodir);
+    reg_w(g_gpio_mmio + GIO_IODIR(ACT_BANK), iodir);
 
-    uint32_t oden = reg_r(g_gio + GIO_ODEN(ACT_BANK));
+    uint32_t oden = reg_r(g_gpio_mmio + GIO_ODEN(ACT_BANK));
     oden &= ~(1u << ACT_GPIO);
-    reg_w(g_gio + GIO_ODEN(ACT_BANK), oden);
-}
-
-/* Drive line high (LED off) or low (LED on) for active-low LED */
-static void led_set(int on)
-{
-    uint32_t d = reg_r(g_gio + GIO_DATA(ACT_BANK));
-    if (on)
-        d &= ~(1u << ACT_GPIO);
-    else
-        d |= (1u << ACT_GPIO);
-    reg_w(g_gio + GIO_DATA(ACT_BANK), d);
+    reg_w(g_gpio_mmio + GIO_ODEN(ACT_BANK), oden);
 }
 
 static void led_toggle(void)
 {
-    uint32_t d = reg_r(g_gio + GIO_DATA(ACT_BANK));
+    uint32_t d = reg_r(g_gpio_mmio + GIO_DATA(ACT_BANK));
     d ^= (1u << ACT_GPIO);
-    reg_w(g_gio + GIO_DATA(ACT_BANK), d);
+    reg_w(g_gpio_mmio + GIO_DATA(ACT_BANK), d);
 }
 
-/* Slow blink if we could not find a DTB (diagnostic) */
 static void panic_blink_loop(void)
 {
     for (;;) {
@@ -158,21 +112,26 @@ static void panic_blink_loop(void)
 
 void kernel_main(uint64_t reg0, uint64_t reg1)
 {
-    led_init();
-    arm_timer_enable();
-
     void *dtb = pick_dtb(reg0, reg1);
     if (!dtb) {
-        /* No valid DTB: very slow blink (spin delay only — timer may still work but keep pattern obvious) */
+        g_gpio_mmio = MMIO_SOC_FALLBACK;
+        led_init();
         panic_blink_loop();
     }
 
-    /*
-     * DTB magic OK: steady blink using real milliseconds.
-     * 250 ms per half-cycle ≈ 2 Hz full blink.
-     */
     g_firmware_dtb = dtb;
 
+    /*
+     * Pi 5 bcm2712.dtsi: gio_aon reg = <0x7d517c00 0x40>; CPU map = 0x1_0000_0000 + offset.
+     * If this fails (unexpected DTB), keep MMIO_SOC_FALLBACK from static init.
+     */
+    uint64_t mmio = g_gpio_mmio;
+    if (fdt_find_soc_mmio_32(dtb, GIO_AON_REG_ADDR, GIO_AON_REG_SIZE, &mmio) == 0)
+        g_gpio_mmio = mmio;
+
+    led_init();
+
+    /* Half-period in ms (try 50 for a fast blink). */
     for (;;) {
         led_toggle();
         delay_ms(250);

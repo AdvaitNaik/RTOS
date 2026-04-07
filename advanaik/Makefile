@@ -5,7 +5,7 @@ OBJCOPY = $(CROSS)objcopy
 
 CFLAGS = -Wall -O2 -ffreestanding -nostdlib -nostartfiles -mcpu=cortex-a76 -I.
 
-OBJS = start.o main.o
+OBJS = start.o main.o fdt.o
 
 all: kernel8.img
 
