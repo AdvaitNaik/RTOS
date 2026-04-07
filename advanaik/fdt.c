@@ -43,6 +43,35 @@ static const uint8_t *align4_ptr(const uint8_t *p)
     return (const uint8_t *)((x + 3) & ~(uintptr_t)3);
 }
 
+/*
+ * Match reg in forms seen on BCM2712 / Pi 5:
+ *   <addr size>           — 8 bytes (#address-cells = 1, #size-cells = 1)
+ *   <0 addr 0 size>       — 16 bytes (64-bit addr + 64-bit size in low words)
+ */
+static int reg_matches_soc_mmio(uint32_t plen, const uint8_t *pv, uint32_t reg_addr,
+                                uint32_t reg_size, uint64_t *out_cpu_phys)
+{
+    if (plen >= 8) {
+        uint32_t a = fdt_be32(pv);
+        uint32_t s = fdt_be32(pv + 4);
+        if (a == reg_addr && s == reg_size) {
+            *out_cpu_phys = FDT_BCM2712_SOC_PHYS + (uint64_t)a;
+            return 0;
+        }
+    }
+    if (plen >= 16) {
+        uint32_t a0 = fdt_be32(pv);
+        uint32_t a1 = fdt_be32(pv + 4);
+        uint32_t s0 = fdt_be32(pv + 8);
+        uint32_t s1 = fdt_be32(pv + 12);
+        if (a0 == 0 && a1 == reg_addr && s0 == 0 && s1 == reg_size) {
+            *out_cpu_phys = FDT_BCM2712_SOC_PHYS + (uint64_t)a1;
+            return 0;
+        }
+    }
+    return -1;
+}
+
 int fdt_find_soc_mmio_32(const void *dtb, uint32_t reg_addr, uint32_t reg_size,
                          uint64_t *out_cpu_phys)
 {
@@ -68,7 +97,6 @@ int fdt_find_soc_mmio_32(const void *dtb, uint32_t reg_addr, uint32_t reg_size,
         p += 4;
 
         if (token == FDT_BEGIN_NODE) {
-            const char *name = (const char *)p;
             while (p < end && *p)
                 p++;
             if (p >= end)
@@ -84,21 +112,21 @@ int fdt_find_soc_mmio_32(const void *dtb, uint32_t reg_addr, uint32_t reg_size,
             p += 4;
             uint32_t nameoff = fdt_be32(p);
             p += 4;
-            if (nameoff >= totalsize)
+            /*
+             * nameoff is relative to the strings block (off_dt_strings), not to base.
+             * Comparing nameoff >= totalsize wrongly rejected valid properties and
+             * could abort the walk early → FDT lookup always failed → solid LED ON.
+             */
+            if ((uintptr_t)str + (uintptr_t)nameoff >= (uintptr_t)base + totalsize)
                 return -6;
             const char *pname = (const char *)(str + nameoff);
             const uint8_t *pv = p;
             if (p + plen > end)
                 return -7;
 
-            if (streq(pname, "reg") && plen >= 8) {
-                uint32_t a = fdt_be32(pv);
-                uint32_t s = fdt_be32(pv + 4);
-                if (a == reg_addr && s == reg_size) {
-                    *out_cpu_phys = FDT_BCM2712_SOC_PHYS + (uint64_t)a;
-                    return 0;
-                }
-            }
+            if (streq(pname, "reg") &&
+                reg_matches_soc_mmio(plen, pv, reg_addr, reg_size, out_cpu_phys) == 0)
+                return 0;
 
             p = pv + plen;
             p = align4_ptr(p);
