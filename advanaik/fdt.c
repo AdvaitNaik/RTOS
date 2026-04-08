@@ -37,6 +37,42 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
+static const char *str_contains(const char *hay, const char *needle)
+{
+    if (!needle[0])
+        return hay;
+    for (; *hay; hay++) {
+        const char *a = hay;
+        const char *b = needle;
+        while (*a && *b && *a == *b) {
+            a++;
+            b++;
+        }
+        if (!*b)
+            return hay;
+    }
+    return 0;
+}
+
+static int blob_contains_ascii(const uint8_t *pv, uint32_t plen, const char *needle)
+{
+    uint32_t nlen = 0;
+    while (needle[nlen])
+        nlen++;
+    if (plen < nlen)
+        return 0;
+    for (uint32_t i = 0; i + nlen <= plen; i++) {
+        uint32_t j;
+        for (j = 0; j < nlen; j++) {
+            if (pv[i + j] != (uint8_t)needle[j])
+                break;
+        }
+        if (j == nlen)
+            return 1;
+    }
+    return 0;
+}
+
 static const uint8_t *align4_ptr(const uint8_t *p)
 {
     uintptr_t x = (uintptr_t)p;
@@ -44,17 +80,16 @@ static const uint8_t *align4_ptr(const uint8_t *p)
 }
 
 /*
- * Match reg in forms seen on BCM2712 / Pi 5:
- *   <addr size>           — 8 bytes (#address-cells = 1, #size-cells = 1)
- *   <0 addr 0 size>       — 16 bytes (64-bit addr + 64-bit size in low words)
+ * Parse reg at gio_aon: accept exact size or larger (firmware may round region up).
+ * Two cells: <addr size> or four: <0 addr 0 size>.
  */
-static int reg_matches_soc_mmio(uint32_t plen, const uint8_t *pv, uint32_t reg_addr,
-                                uint32_t reg_size, uint64_t *out_cpu_phys)
+static int reg_parse_gio_aon(uint32_t plen, const uint8_t *pv, uint32_t reg_addr,
+                             uint32_t reg_min_size, uint64_t *out_cpu_phys)
 {
     if (plen >= 8) {
         uint32_t a = fdt_be32(pv);
         uint32_t s = fdt_be32(pv + 4);
-        if (a == reg_addr && s == reg_size) {
+        if (a == reg_addr && s >= reg_min_size) {
             *out_cpu_phys = FDT_BCM2712_SOC_PHYS + (uint64_t)a;
             return 0;
         }
@@ -64,7 +99,7 @@ static int reg_matches_soc_mmio(uint32_t plen, const uint8_t *pv, uint32_t reg_a
         uint32_t a1 = fdt_be32(pv + 4);
         uint32_t s0 = fdt_be32(pv + 8);
         uint32_t s1 = fdt_be32(pv + 12);
-        if (a0 == 0 && a1 == reg_addr && s0 == 0 && s1 == reg_size) {
+        if (a0 == 0 && a1 == reg_addr && s0 == 0 && s1 >= reg_min_size) {
             *out_cpu_phys = FDT_BCM2712_SOC_PHYS + (uint64_t)a1;
             return 0;
         }
@@ -92,19 +127,38 @@ int fdt_find_soc_mmio_32(const void *dtb, uint32_t reg_addr, uint32_t reg_size,
     const uint8_t *p = base + off_struct;
     const uint8_t *end = base + totalsize;
 
+    int depth = 0;
+    /* Depth of node we think is gio_aon (gpio@7d517c00 or compatible bcm7445-gpio). */
+    int gio_hit_d = 0;
+    int gio_by_name = 0;
+    int gio_by_compat = 0;
+
     while (p + 4 <= end) {
         uint32_t token = fdt_be32(p);
         p += 4;
 
         if (token == FDT_BEGIN_NODE) {
+            const char *name = (const char *)p;
             while (p < end && *p)
                 p++;
             if (p >= end)
                 return -4;
             p++;
             p = align4_ptr(p);
+
+            depth++;
+            gio_by_name = str_contains(name, "7d517c00") != 0;
+            gio_by_compat = 0;
+            if (gio_by_name)
+                gio_hit_d = depth;
         } else if (token == FDT_END_NODE) {
-            /* nothing */
+            if (gio_hit_d == depth) {
+                gio_hit_d = 0;
+                gio_by_name = 0;
+                gio_by_compat = 0;
+            }
+            if (depth > 0)
+                depth--;
         } else if (token == FDT_PROP) {
             if (p + 8 > end)
                 return -5;
@@ -112,11 +166,6 @@ int fdt_find_soc_mmio_32(const void *dtb, uint32_t reg_addr, uint32_t reg_size,
             p += 4;
             uint32_t nameoff = fdt_be32(p);
             p += 4;
-            /*
-             * nameoff is relative to the strings block (off_dt_strings), not to base.
-             * Comparing nameoff >= totalsize wrongly rejected valid properties and
-             * could abort the walk early → FDT lookup always failed → solid LED ON.
-             */
             if ((uintptr_t)str + (uintptr_t)nameoff >= (uintptr_t)base + totalsize)
                 return -6;
             const char *pname = (const char *)(str + nameoff);
@@ -124,8 +173,22 @@ int fdt_find_soc_mmio_32(const void *dtb, uint32_t reg_addr, uint32_t reg_size,
             if (p + plen > end)
                 return -7;
 
+            if (streq(pname, "compatible") && depth > 0 &&
+                blob_contains_ascii(pv, plen, "bcm7445-gpio")) {
+                gio_by_compat = 1;
+                gio_hit_d = depth;
+            }
+
+            if (streq(pname, "reg") && gio_hit_d > 0 && depth == gio_hit_d) {
+                if (gio_by_name || gio_by_compat) {
+                    if (reg_parse_gio_aon(plen, pv, reg_addr, reg_size, out_cpu_phys) == 0)
+                        return 0;
+                }
+            }
+
+            /* Fallback: any reg in tree with matching address (relaxed size). */
             if (streq(pname, "reg") &&
-                reg_matches_soc_mmio(plen, pv, reg_addr, reg_size, out_cpu_phys) == 0)
+                reg_parse_gio_aon(plen, pv, reg_addr, reg_size, out_cpu_phys) == 0)
                 return 0;
 
             p = pv + plen;
