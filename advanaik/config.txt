@@ -1,3 +1,27 @@
+# Boot (bare-metal kernel8.img)
 kernel=kernel8.img
 arm_64bit=1
 os_check=0
+
+# --- Display: help firmware light the pipe before mailbox FB (matches main.c 640x480) ---
+# Pretend HDMI is connected (helps docks / picky EDID).
+hdmi_force_hotplug=1
+# DMT: 640x480 @ 60 Hz (see https://www.raspberrypi.com/documentation/computers/config_txt.html#hdmi_mode )
+hdmi_group=2
+hdmi_mode=4
+# Hint firmware framebuffer geometry (same as pi5_mailbox_framebuffer sizes).
+framebuffer_width=640
+framebuffer_height=480
+framebuffer_depth=32
+# HDMI TMDS mode (vs DVI); some panels need this.
+hdmi_drive=2
+# Headroom for VC to allocate the surface (increase if FB init still fails).
+gpu_mem=128
+
+# If still black, try 1080p instead: comment the four lines above (group/mode + fb w/h),
+# then use:
+# hdmi_group=2
+# hdmi_mode=82
+# framebuffer_width=1920
+# framebuffer_height=1080
+# and set FB_WIDTH/FB_HEIGHT in main.c to match.
