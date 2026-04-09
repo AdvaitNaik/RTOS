@@ -1,6 +1,9 @@
 /* BCM2712 (Pi 5) MMIO — bcm2712.dtsi: mailbox@7c013880, soc at 0x1_0000_0000 + offset */
+#include <stddef.h>
 #include <stdint.h>
 #include "pi5_hw.h"
+
+volatile uint32_t g_pi5_fb_bus_raw;
 
 #define MMIO_SOC UINT64_C(0x0000001000000000)
 
@@ -54,11 +57,23 @@ static int mbox_call_prop(volatile uint32_t *mbox)
 
 static uintptr_t gpu_bus_to_cpu_phys(uint32_t bus)
 {
-    /* Legacy GPU "bus" addresses: low 30 bits often map to ARM RAM (Pi 1–4). */
+    /* VideoCore "bus" → ARM SDRAM physical: low 30 bits (Pi family convention). */
     uintptr_t lo = (uintptr_t)(bus & 0x3FFFFFFFU);
     if (lo == 0 && bus != 0)
         return (uintptr_t)bus;
     return lo;
+}
+
+void pi5_dcache_clean_range(uintptr_t start, size_t len)
+{
+    if (len == 0)
+        return;
+    const uintptr_t line = 64;
+    uintptr_t end = start + len;
+    uintptr_t p = start & ~(line - 1);
+    for (; p < end; p += line)
+        asm volatile("dc cvac, %0" : : "r"(p) : "memory");
+    asm volatile("dsb sy" ::: "memory");
 }
 
 int pi5_mailbox_framebuffer(uint32_t w, uint32_t h, uintptr_t *out_cpu, uint32_t *out_pitch)
@@ -98,6 +113,8 @@ int pi5_mailbox_framebuffer(uint32_t w, uint32_t h, uintptr_t *out_cpu, uint32_t
     if (m[24] == 0 || m[25] == 0)
         return -2;
 
+    g_pi5_fb_bus_raw = m[24];
+
     m[0] = 8 * 4;
     m[1] = 0;
     m[2] = MBOX_TAG_GET_PITCH;
@@ -120,9 +137,9 @@ int pi5_mailbox_framebuffer(uint32_t w, uint32_t h, uintptr_t *out_cpu, uint32_t
 
 void pi5_framebuffer_fill_bands(uintptr_t base, uint32_t pitch, uint32_t w, uint32_t h)
 {
-    /* XRGB8888; exact R/B order depends on pixel-order tag (1 = common firmware default). */
-    uint32_t top = 0x00e04020u;
-    uint32_t bot = 0x002060c0u;
+    /* Bright XRGB8888 bands so a working scanout is obvious. */
+    uint32_t top = 0x00FFFFFFu;
+    uint32_t bot = 0x0000FFFFu;
 
     for (uint32_t y = 0; y < h; y++) {
         volatile uint32_t *row =
@@ -132,4 +149,5 @@ void pi5_framebuffer_fill_bands(uintptr_t base, uint32_t pitch, uint32_t w, uint
             row[x] = c;
     }
     asm volatile("dmb sy" ::: "memory");
+    pi5_dcache_clean_range(base, (size_t)pitch * (size_t)h);
 }

@@ -79,6 +79,17 @@ static void led_toggle(void)
     reg_w(g_gpio_mmio + GIO_DATA(ACT_BANK), d);
 }
 
+/* Active-low ACT: on != 0 → LED lit (GPIO driven low). */
+static void led_set(int on)
+{
+    uint32_t d = reg_r(g_gpio_mmio + GIO_DATA(ACT_BANK));
+    if (on)
+        d &= ~(1u << ACT_GPIO);
+    else
+        d |= (1u << ACT_GPIO);
+    reg_w(g_gpio_mmio + GIO_DATA(ACT_BANK), d);
+}
+
 void kernel_main(uint64_t reg0, uint64_t reg1)
 {
     (void)reg0;
@@ -102,8 +113,17 @@ void kernel_main(uint64_t reg0, uint64_t reg1)
             pi5_framebuffer_fill_bands(fb, pitch, FB_WIDTH, FB_HEIGHT);
     }
 
+    /*
+     * LED (no UART): fast blink = mailbox OK; solid on = mailbox failed (see g_fb_init_rc).
+     */
+    if (g_fb_init_rc != 0) {
+        led_set(1);
+        for (;;)
+            asm volatile("wfe");
+    }
+
     for (;;) {
         led_toggle();
-        delay_ms(250);
+        delay_ms(100);
     }
 }
