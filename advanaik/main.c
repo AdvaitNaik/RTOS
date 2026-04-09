@@ -97,10 +97,7 @@ void kernel_main(uint64_t reg0, uint64_t reg1)
 
     g_gio_mmio_phys = g_gpio_mmio;
 
-    led_init();
-    /* Known starting level so failure-path led_set(1) is unambiguous (active-low). */
-    led_set(0);
-
+    /* Mailbox before C GPIO: start.S already lit ACT; if we die here, LED stays on from asm. */
     g_fb_init_rc = -99;
     g_fb_base = 0;
     g_fb_pitch = 0;
@@ -114,6 +111,8 @@ void kernel_main(uint64_t reg0, uint64_t reg1)
         if (fbrc == 0 && fb != 0 && pitch >= FB_WIDTH * 4u)
             pi5_framebuffer_fill_bands(fb, pitch, FB_WIDTH, FB_HEIGHT);
     }
+
+    led_init();
 
     /*
      * LED (no UART): fast blink = mailbox OK; solid on = mailbox failed (see g_fb_init_rc).
