@@ -37,18 +37,27 @@ enum {
     MBOX_RESP    = 0x80000000U
 };
 
+/* Bounded spin so a dead VideoCore or wrong reply cannot hang the CPU (ACT stuck default-off). */
+enum { MBOX_SPIN_MAX = 200000000u };
+
 static int mbox_call_prop(volatile uint32_t *mbox)
 {
     uintptr_t mb = (uintptr_t)mbox;
     uint32_t a = ((uint32_t)(mb & ~0xFULL)) | (uint32_t)MBOX_CH_PROP;
 
-    while (mmio_r(MBOX_BASE + MBOX_STATUS) & MBOX_FULL)
-        ;
+    uint32_t spin = 0;
+    while (mmio_r(MBOX_BASE + MBOX_STATUS) & MBOX_FULL) {
+        if (++spin > MBOX_SPIN_MAX)
+            return 0;
+    }
     mmio_w(MBOX_BASE + MBOX_WRITE, a);
 
     for (;;) {
-        while (mmio_r(MBOX_BASE + MBOX_STATUS) & MBOX_EMPTY)
-            ;
+        spin = 0;
+        while (mmio_r(MBOX_BASE + MBOX_STATUS) & MBOX_EMPTY) {
+            if (++spin > MBOX_SPIN_MAX)
+                return 0;
+        }
         uint32_t r = mmio_r(MBOX_BASE + MBOX_READ);
         if (r == a)
             return (mbox[1] & MBOX_RESP) != 0;
@@ -62,6 +71,20 @@ static uintptr_t gpu_bus_to_cpu_phys(uint32_t bus)
     if (lo == 0 && bus != 0)
         return (uintptr_t)bus;
     return lo;
+}
+
+static int fb_region_ok(uintptr_t base, uint32_t pitch, uint32_t h)
+{
+    if (pitch < 4 || h == 0)
+        return 0;
+    size_t nbytes = (size_t)pitch * (size_t)h;
+    if (nbytes / h != pitch)
+        return 0;
+    if (base < 0x100000ull)
+        return 0;
+    if (base + nbytes < base || base + nbytes > UINT64_C(0x1000000000))
+        return 0;
+    return 1;
 }
 
 void pi5_dcache_clean_range(uintptr_t start, size_t len)
@@ -137,6 +160,9 @@ int pi5_mailbox_framebuffer(uint32_t w, uint32_t h, uintptr_t *out_cpu, uint32_t
 
 void pi5_framebuffer_fill_bands(uintptr_t base, uint32_t pitch, uint32_t w, uint32_t h)
 {
+    if (!fb_region_ok(base, pitch, h))
+        return;
+
     /* Bright XRGB8888 bands so a working scanout is obvious. */
     uint32_t top = 0x00FFFFFFu;
     uint32_t bot = 0x0000FFFFu;

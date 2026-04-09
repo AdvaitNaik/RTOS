@@ -98,6 +98,8 @@ void kernel_main(uint64_t reg0, uint64_t reg1)
     g_gio_mmio_phys = g_gpio_mmio;
 
     led_init();
+    /* Known starting level so failure-path led_set(1) is unambiguous (active-low). */
+    led_set(0);
 
     g_fb_init_rc = -99;
     g_fb_base = 0;
