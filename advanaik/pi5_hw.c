@@ -52,7 +52,8 @@ static int mbox_call_prop(volatile uint32_t *mbox)
     }
     mmio_w(MBOX_BASE + MBOX_WRITE, a);
 
-    for (;;) {
+    /* Bound mismatched READ values — otherwise this loop never returns. */
+    for (uint32_t tries = 0; tries < MBOX_SPIN_MAX; tries++) {
         spin = 0;
         while (mmio_r(MBOX_BASE + MBOX_STATUS) & MBOX_EMPTY) {
             if (++spin > MBOX_SPIN_MAX)
@@ -62,6 +63,7 @@ static int mbox_call_prop(volatile uint32_t *mbox)
         if (r == a)
             return (mbox[1] & MBOX_RESP) != 0;
     }
+    return 0;
 }
 
 static uintptr_t gpu_bus_to_cpu_phys(uint32_t bus)
